@@ -32,10 +32,41 @@ jobs:
         run: |
           az group create --location ${{env.AZURE_LOCATION}} --name ${{env.AZURE_RESOURCE_GROUP}} --subscription ${{secrets.AZURE_SUBSCRIPTION_ID}}
 
-      - name: Create Azure app service plan
-        if: success()
-        run: |
-          az appservice plan create --resource-group ${{env.AZURE_RESOURCE_GROUP}} --name ${{env.AZURE_APP_PLAN}} --is-linux --sku F1 --subscription ${{secrets.AZURE_SUBSCRIPTION_ID}}
+      - name: Create Azure app service plan (with region fallback)
+  if: success()
+  run: |
+    # Define your preferred and fallback locations
+    PRIMARY_LOCATION="West Europe"
+    FALLBACK_LOCATION="East US"
+
+    echo "Attempting to create App Service Plan in $PRIMARY_LOCATION..."
+
+    # Try primary location first
+    if az appservice plan create \
+      --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+      --name ${{ env.AZURE_APP_PLAN }} \
+      --is-linux \
+      --sku F1 \
+      --location "$PRIMARY_LOCATION" \
+      --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}; then
+        echo "✅ Successfully created App Service Plan in $PRIMARY_LOCATION"
+    else
+        echo "⚠️ Failed to create in $PRIMARY_LOCATION. Trying fallback location: $FALLBACK_LOCATION..."
+        az group create \
+          --location "$FALLBACK_LOCATION" \
+          --name ${{ env.AZURE_RESOURCE_GROUP }} \
+          --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+        az appservice plan create \
+          --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+          --name ${{ env.AZURE_APP_PLAN }} \
+          --is-linux \
+          --sku F1 \
+          --location "$FALLBACK_LOCATION" \
+          --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        echo "✅ Successfully created App Service Plan in $FALLBACK_LOCATION"
+    fi
+
 
       - name: Create webapp resource
         if: success()
