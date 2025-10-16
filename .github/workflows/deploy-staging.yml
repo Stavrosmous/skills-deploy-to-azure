@@ -11,12 +11,14 @@ env:
   ###############################################
   DOCKER_IMAGE_NAME: Stavrosmous7-azure-ttt
   AZURE_WEBAPP_NAME: Stavrosmous7-ttt-app
+  AZURE_RESOURCE_GROUP: cd-with-actions
+  AZURE_APP_PLAN: actions-ttt-deployment
+  AZURE_LOCATION: West Europe
   ###############################################
 
 jobs:
   build:
     if: contains(github.event.pull_request.labels.*.name, 'stage')
-
     runs-on: ubuntu-latest
 
     steps:
@@ -24,10 +26,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 16
+
       - name: npm install and build webpack
         run: |
           npm install
           npm run build
+
       - uses: actions/upload-artifact@v4
         with:
           name: webpack artifacts
@@ -58,7 +62,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{env.IMAGE_REGISTRY_URL}}/${{ github.repository }}/${{env.DOCKER_IMAGE_NAME}}
+          images: ${{ env.IMAGE_REGISTRY_URL }}/${{ github.repository }}/${{ env.DOCKER_IMAGE_NAME }}
           tags: |
             type=sha,format=long,prefix=
 
@@ -74,25 +78,69 @@ jobs:
     runs-on: ubuntu-latest
     needs: Build-Docker-Image
     name: Deploy app container to Azure
+
     steps:
-      - name: "Login via Azure CLI"
+      - name: Login via Azure CLI
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - uses: azure/docker-login@v1
         with:
-          login-server: ${{env.IMAGE_REGISTRY_URL}}
+          login-server: ${{ env.IMAGE_REGISTRY_URL }}
           username: ${{ github.actor }}
           password: ${{ secrets.CR_PAT }}
+
+      - name: Ensure Azure resources exist
+        run: |
+          set -e
+          echo "🔍 Checking Azure resources..."
+
+          # Create Resource Group if not exists
+          if ! az group show --name ${{ env.AZURE_RESOURCE_GROUP }} --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} > /dev/null 2>&1; then
+            echo "Creating resource group ${{ env.AZURE_RESOURCE_GROUP }}..."
+            az group create \
+              --name ${{ env.AZURE_RESOURCE_GROUP }} \
+              --location "${{ env.AZURE_LOCATION }}" \
+              --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          else
+            echo "✅ Resource group exists."
+          fi
+
+          # Create App Service Plan if not exists
+          if ! az appservice plan show --name ${{ env.AZURE_APP_PLAN }} --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} > /dev/null 2>&1; then
+            echo "Creating app service plan ${{ env.AZURE_APP_PLAN }}..."
+            az appservice plan create \
+              --name ${{ env.AZURE_APP_PLAN }} \
+              --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+              --sku B1 \
+              --is-linux \
+              --location "${{ env.AZURE_LOCATION }}" \
+              --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          else
+            echo "✅ App service plan exists."
+          fi
+
+          # Create Web App if not exists
+          if ! az webapp show --name ${{ env.AZURE_WEBAPP_NAME }} --resource-group ${{ env.AZURE_RESOURCE_GROUP }} --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }} > /dev/null 2>&1; then
+            echo "Creating web app ${{ env.AZURE_WEBAPP_NAME }}..."
+            az webapp create \
+              --name ${{ env.AZURE_WEBAPP_NAME }} \
+              --plan ${{ env.AZURE_APP_PLAN }} \
+              --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+              --deployment-container-image-name nginx \
+              --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          else
+            echo "✅ Web app exists."
+          fi
 
       - name: Deploy web app container
         uses: azure/webapps-deploy@v3
         with:
-          app-name: ${{env.AZURE_WEBAPP_NAME}}
-          images: ${{env.IMAGE_REGISTRY_URL}}/${{ github.repository }}/${{env.DOCKER_IMAGE_NAME}}:${{ github.sha }}
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          images: ${{ env.IMAGE_REGISTRY_URL }}/${{ github.repository }}/${{ env.DOCKER_IMAGE_NAME }}:${{ github.sha }}
 
-      - name: Azure logout via Azure CLI
+      - name: Azure logout
         uses: azure/CLI@v2
         with:
           inlineScript: |
